@@ -1,0 +1,64 @@
+name: collect
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # data refresh + deploy
+    - cron: "5 */6 * * *"    # same, plus commit archive snapshot
+  workflow_dispatch:
+
+permissions:
+  contents: write   # archive commit
+  pages: write
+  id-token: write
+
+# One run at a time: no concurrent pushes, no lost state.
+concurrency:
+  group: aquaradar
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Unit tests
+        run: python -m unittest discover -s collector
+
+      # Exits 1 if no source returned data -> later steps are skipped and the
+      # previous good deployment stays online.
+      - name: Collect
+        run: python collector/collect.py --out site --archive archive
+
+      - name: Assemble site
+        run: cp web/index.html site/index.html
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v5
+
+      - name: Commit archive snapshot
+        if: github.event.schedule == '5 */6 * * *' || github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "aquaradar-bot"
+          git config user.email "aquaradar-bot@users.noreply.github.com"
+          git add archive
+          if git diff --cached --quiet; then
+            echo "archive unchanged"
+            exit 0
+          fi
+          git commit -m "archive $(date -u +%Y-%m-%dT%H:%MZ)"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
