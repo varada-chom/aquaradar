@@ -206,18 +206,20 @@ def mock_payloads(now):
     return {"wl": {"result": "OK", "waterlevel_data": {"data": wl}}, "rain": {"result": "OK", "data": rain}, "ews": ews}
 
 
-SOURCES = [("wl", TW + "/waterlevel_load", None, norm_wl),
-           ("rain", TW + "/rain_24h", None, norm_rain),
-           ("ews", EWS, {"action": "LoadStation"}, norm_ews)]
+# (key, url, form, normalizer, fetch options). EWS timed out from GitHub's US runners on the
+# first live run, so it gets one short attempt instead of 3 x 30 s that delay every deploy.
+SOURCES = [("wl", TW + "/waterlevel_load", None, norm_wl, {}),
+           ("rain", TW + "/rain_24h", None, norm_rain, {}),
+           ("ews", EWS, {"action": "LoadStation"}, norm_ews, {"tries": 1, "timeout": 15})]
 
 
 def collect(mock=False, now=None):
     now = now or time.time()
     payloads = mock_payloads(now) if mock else None
     sigs, meta = [], {}
-    for key, url, form, fn in SOURCES:
+    for key, url, form, fn, kw in SOURCES:
         try:
-            rows = fn(payloads[key] if mock else fetch(url, form))
+            rows = fn(payloads[key] if mock else fetch(url, form, **kw))
             ts = [r["t"] for r in rows if r["t"] is not None]
             meta[key] = {"ok": True, "n": len(rows), "newest_age_min": int((now - max(ts)) / 60) if ts else None}
             sigs += rows
